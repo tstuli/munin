@@ -1,0 +1,109 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# See documentation at the end of this file.
+
+require 'rexml/document'
+require 'net/http'
+require 'uri'
+
+if ARGV.length != 1 || ARGV.first != 'config'
+  raise 'Error: plugin designed for the dirtyconfig protocol, must be run with the config argument'
+end
+
+address = ENV.fetch('address', nil)
+raise 'Error: address not set' if address.nil?
+
+uri_prefix = "http://#{address}/api/"
+responses = {}
+
+%w[
+  LiveData.xml
+].each do |endpoint|
+  responses[endpoint] = REXML::Document.new(
+    Net::HTTP.get_response(URI("#{uri_prefix}#{endpoint}")).body
+  )
+end
+
+root = responses["LiveData.xml"].root
+if root.name != "LiveData"
+   raise "Invalid XML root"
+end
+
+voltagenode = REXML::XPath.first(responses["LiveData.xml"], '//LiveData/Voltage/Total/VoltageNow').text
+powernode = REXML::XPath.first(responses["LiveData.xml"], '//LiveData/Power/Total/PowerNow').text
+kvanode = REXML::XPath.first(responses["LiveData.xml"], '//LiveData/Power/MTU1/KVA').text
+
+puts <<~MUNIN
+  multigraph ted5000_voltagenow
+  graph_title TED5000 Voltage Now
+  graph_vlabel Voltage
+  graph_category ted5000
+  graph_args --base 1000 --upper-limit 255 --lower-limit 235 --rigid
+  voltage.type GAUGE
+  voltage.value #{voltagenode.to_i / 10.0}
+  voltage.label Voltage (v)
+
+  multigraph ted5000_powernow
+  graph_title TED5000 Power Now
+  graph_vlabel Power (KW)
+  graph_category ted5000
+  power.type GAUGE
+  power.value #{powernode.to_i / 1000.0}
+  power.label Power (KW)
+  kva.type GAUGE
+  kva.value #{kvanode.to_i / 1000.0}
+  kva.label KVA (KVA)
+MUNIN
+
+__END__
+
+=pod
+
+=encoding utf8
+
+=head1 NAME
+
+ted5000 - Munin plugin for graphing data from ted5000
+
+=head1 CONFIGURATION
+
+Configuration in C</etc/munin/plugin-conf.d/munin-node>:
+
+ [ted5000]
+   # IP address or hostname of your TED5000 
+   env.address 10.0.0.136
+
+=head1 NOTES
+
+Requires the multigraph and dirtyconfig capabilities available in munin 2.0
+and newer.
+
+Developed and tested with Tesla Wall Connector generation 3 firmware
+version 22.7.0+gbc6c1736fa3426, part number 1457768-02-G (from
+C</api/1/version>).
+
+=head1 KNOWN ISSUES
+
+The Tesla Wall Connector stops responding to queries on its REST
+API during charging for unknown reasons.
+
+=head1 AUTHOR
+
+Copyright © 2022 Kenyon Ralph <kenyon@kenyonralph.com>
+
+=head1 LICENSE
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program.  If not, see L<https://www.gnu.org/licenses/>.
+
+=cut
